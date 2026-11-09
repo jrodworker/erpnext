@@ -257,6 +257,9 @@ class OperationsService:
 		elif flt(previous.qty) != flt(self.doc.qty) and flt(previous.qty):
 			self._scale_saved_operation_time(previous)
 			self._scale_saved_output_qty(previous)
+			# Recalculate after scaling so planned_operating_cost reflects the
+			# updated time_in_mins values rather than carrying stale amounts.
+			self.calculate_operating_cost()
 
 	def _scale_saved_output_qty(self, previous):
 		saved_rows = {row.name: row for row in previous.get("operations")}

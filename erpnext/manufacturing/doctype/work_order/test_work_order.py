@@ -8165,6 +8165,102 @@ class TestWorkOrder(ERPNextTestSuite):
 		self.assertEqual(wo.planned_operating_cost, 0)
 		self.assertEqual(wo.total_operating_cost, 0)
 
+	@ERPNextTestSuite.change_settings(
+		"Manufacturing Settings",
+		{"disable_capacity_planning": 1, "allow_editing_of_items_and_quantities_in_work_order": 0},
+	)
+	def test_planned_operating_cost_updates_after_bom_operation_time_change(self):
+		"""Regression test for: Work Order keeps stale operating cost after operations change.
+
+		Steps:
+		1. Create a BOM with one operation: 10 min at $120/hr → planned cost = $20.
+		2. Save a draft Work Order — confirm planned_operating_cost == 20.
+		3. Amend the BOM operation to 15 min (cancel + new revision).
+		4. Point the Work Order at the new BOM and save.
+		5. Assert planned_operating_cost == 30 (not stale $20).
+		"""
+		rm_item = make_item(properties={"is_stock_item": 1, "valuation_rate": 100}).name
+		fg_item = make_item(properties={"is_stock_item": 1}).name
+		operation, workstation = make_review_operation(hour_rate=120)
+
+		# BOM v1: 10 min → planned_operating_cost per unit = 10/60 * 120 = 20
+		bom_v1 = make_review_bom(
+			fg_item,
+			[{"item_code": rm_item, "qty": 1}],
+			operations=[{"operation": operation, "workstation": workstation, "time_in_mins": 10, "hour_rate": 120}],
+		)
+
+		wo = make_review_work_order(fg_item, bom_v1.name, 1, submit=False, use_multi_level_bom=0)
+		self.assertAlmostEqual(wo.planned_operating_cost, 20.0, places=2)
+
+		# Simulate operation time change: cancel v1, create BOM v2 with 15 min
+		bom_v1.cancel()
+		bom_v2 = make_review_bom(
+			fg_item,
+			[{"item_code": rm_item, "qty": 1}],
+			operations=[{"operation": operation, "workstation": workstation, "time_in_mins": 15, "hour_rate": 120}],
+		)
+
+		# Switch Work Order to updated BOM and save — cost must reflect new operation time
+		wo.bom_no = bom_v2.name
+		wo.save()
+
+		# 15 min at $120/hr = $30; must NOT be stale $20
+		self.assertAlmostEqual(
+			wo.planned_operating_cost,
+			30.0,
+			places=2,
+			msg=(
+				f"planned_operating_cost is {wo.planned_operating_cost} but should be 30.0 "
+				"after reloading operations from updated BOM"
+			),
+		)
+
+	@ERPNextTestSuite.change_settings(
+		"Manufacturing Settings",
+		{"disable_capacity_planning": 1, "allow_editing_of_items_and_quantities_in_work_order": 0},
+	)
+	def test_planned_operating_cost_updates_after_bom_operation_hour_rate_change(self):
+		"""Regression test: cost recalculates when hour_rate changes in the BOM operation.
+
+		Steps:
+		1. BOM v1: 30 min at $60/hr → cost = $30.
+		2. BOM v2: 30 min at $120/hr → cost should become $60.
+		3. Switching the Work Order to BOM v2 and saving must give cost = $60.
+		"""
+		rm_item = make_item(properties={"is_stock_item": 1, "valuation_rate": 100}).name
+		fg_item = make_item(properties={"is_stock_item": 1}).name
+		operation, workstation = make_review_operation(hour_rate=60)
+
+		bom_v1 = make_review_bom(
+			fg_item,
+			[{"item_code": rm_item, "qty": 1}],
+			operations=[{"operation": operation, "workstation": workstation, "time_in_mins": 30, "hour_rate": 60}],
+		)
+
+		wo = make_review_work_order(fg_item, bom_v1.name, 1, submit=False, use_multi_level_bom=0)
+		self.assertAlmostEqual(wo.planned_operating_cost, 30.0, places=2)
+
+		bom_v1.cancel()
+		bom_v2 = make_review_bom(
+			fg_item,
+			[{"item_code": rm_item, "qty": 1}],
+			operations=[{"operation": operation, "workstation": workstation, "time_in_mins": 30, "hour_rate": 120}],
+		)
+
+		wo.bom_no = bom_v2.name
+		wo.save()
+
+		self.assertAlmostEqual(
+			wo.planned_operating_cost,
+			60.0,
+			places=2,
+			msg=(
+				f"planned_operating_cost is {wo.planned_operating_cost} but should be 60.0 "
+				"after reloading operations from BOM with updated hour_rate"
+			),
+		)
+
 	def test_draft_qty_change_keeps_fixed_time_of_sub_assembly_operations(self):
 		rm_item = make_item(properties={"is_stock_item": 1, "valuation_rate": 100}).name
 		sub_assembly = make_item(properties={"is_stock_item": 1, "valuation_rate": 100}).name
